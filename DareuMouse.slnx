@@ -1,0 +1,9 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/DareuMouse.Core/DareuMouse.Core.csproj" />
+    <Project Path="src/DareuMouse/DareuMouse.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/DareuMouse.Tests/DareuMouse.Tests.csproj" />
+  </Folder>
+</Solution>
