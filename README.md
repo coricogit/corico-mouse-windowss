@@ -25,15 +25,20 @@ comandos de firmware, de reinicio, de emparejamiento ni de macros.
 
 ## Instalar
 
-1. Descarga `DareuMouse.exe` y guárdalo donde quieras, por ejemplo en
-   `C:\Users\<tú>\Apps\`.
-2. Ábrelo. No necesita instalación, drivers ni .NET.
-3. Si Windows SmartScreen avisa ("Windows protegió su PC"), elige
-   **Más información → Ejecutar de todas formas**. El aviso sale porque el exe
-   no está firmado.
-4. El panel se abre junto a la bandeja. Ciérralo con Esc o haciendo clic
-   fuera; vuelve a abrirlo con el ícono del mouse. Si no ves el ícono, está en
-   la flecha **^** de la bandeja; puedes arrastrarlo a la barra de tareas.
+1. Abre `DareuMouse-Setup-1.0.0.exe`. No pide permisos de administrador: se
+   instala en `%LOCALAPPDATA%\Programs\Dareu Mouse`, con acceso en el menú
+   Inicio y, si lo eliges, en el escritorio y al iniciar Windows.
+2. Si Windows SmartScreen avisa ("Windows protegió su PC"), elige
+   **Más información → Ejecutar de todas formas**. El aviso sale porque el
+   instalador no está firmado.
+3. Para desinstalar: Configuración → Aplicaciones → Dareu Mouse.
+
+También puedes usar `DareuMouse.exe` solo, sin instalar: guárdalo en una carpeta
+fija y ábrelo. No necesita drivers ni .NET.
+
+El panel se abre junto a la bandeja. Ciérralo con Esc o haciendo clic fuera;
+vuelve a abrirlo con el ícono del mouse. Si no ves el ícono, está en la flecha
+**^** de la bandeja; puedes arrastrarlo a la barra de tareas.
 
 Si el mouse está dormido, la app lo dice. Muévelo y espera unos segundos.
 
@@ -66,7 +71,11 @@ Necesitas el SDK de .NET 10. Se puede compilar desde Windows o desde Linux.
 ```bash
 dotnet test
 dotnet publish src/DareuMouse -c Release -o dist
+makensis installer/DareuMouse.nsi
 ```
+
+El instalador se arma con [NSIS](https://nsis.sourceforge.io/) y queda en
+`dist/DareuMouse-Setup-<versión>.exe`.
 
 - `src/DareuMouse.Core`: el protocolo y la lógica del mouse. No depende de
   Windows y lo cubren las pruebas.
