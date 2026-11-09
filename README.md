@@ -88,3 +88,7 @@ El instalador se arma con [NSIS](https://nsis.sourceforge.io/) y queda en
 El formato del protocolo sigue la documentación del proyecto
 [OpenMouse](https://github.com/OpenMouse-Project/mouse-protocol) para el
 A950 PRO Mg. Este código es una implementación independiente.
+
+## Licencia
+
+[MIT](LICENSE)
