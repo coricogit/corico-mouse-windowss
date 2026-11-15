@@ -79,44 +79,85 @@ internal sealed class Pill : Control
     }
 }
 
-/// <summary>Draws the tray icon: a mouse whose body fills with the battery level.</summary>
+/// <summary>
+/// Draws the tray icon: a 16 × 16 pixel-art mouse whose body fills with the battery level.
+/// tools/make_icon.py draws mouse.ico from the same sprite; keep both in sync.
+/// </summary>
 internal static class TrayIcon
 {
+    // K dark edge (visible on light and dark taskbars), O outline, W scroll wheel, b body (battery fill).
+    private static readonly string[] Sprite =
+    [
+        ".....KKKKKK.....",
+        "....KOOOOOOK....",
+        "...KObbOObbOK...",
+        "..KObbbWWbbbOK..",
+        "..KObbbWWbbbOK..",
+        "..KObbbOObbbOK..",
+        "..KObbbbbbbbOK..",
+        "..KObbbbbbbbOK..",
+        "..KObbbbbbbbOK..",
+        "..KObbbbbbbbOK..",
+        "..KObbbbbbbbOK..",
+        "..KObbbbbbbbOK..",
+        "..KObbbbbbbbOK..",
+        "...KObbbbbbOK...",
+        "....KOOOOOOK....",
+        ".....KKKKKK.....",
+    ];
+    private const int BodyTop = 2, BodyBottom = 13;     // rows that hold battery pixels
+
+    private static readonly Color Edge = Color.FromArgb(0x16, 0x17, 0x19);
+    private static readonly Color Empty = Theme.Surface;
+
     public static Icon Draw(int battery, bool known, bool charging, int size)
     {
+        var outline = known ? Color.White : Color.FromArgb(0xA0, 0xA0, 0xA0);
+        var wheel = known ? Theme.Muted : Color.FromArgb(0x6A, 0x6E, 0x73);
+        var fill = charging ? Theme.Accent : battery <= 15 ? Theme.Urgent : battery <= 30 ? Theme.Warning : Theme.Good;
+        var bodyRows = BodyBottom - BodyTop + 1;
+        // Round up so any charge shows at least one row.
+        var filled = known ? (Math.Clamp(battery, 0, 100) * bodyRows + 99) / 100 : 0;
+
         using var bitmap = new Bitmap(size, size);
         using (var g = Graphics.FromImage(bitmap))
         {
-            g.SmoothingMode = SmoothingMode.AntiAlias;
+            g.SmoothingMode = SmoothingMode.None;
+            g.PixelOffsetMode = PixelOffsetMode.Half;
             g.Clear(Color.Transparent);
-            var stroke = Math.Max(1.5f, size / 12f);
-            var body = new RectangleF(size * 0.22f, size * 0.06f, size * 0.56f, size * 0.88f);
-            using var path = new GraphicsPath();
-            var r = body.Width / 2f;
-            path.AddArc(body.X, body.Y, body.Width, body.Width, 180, 180);
-            path.AddArc(body.X, body.Bottom - body.Width, body.Width, body.Width, 0, 180);
-            path.CloseFigure();
-
-            if (known)
+            for (var y = 0; y < Sprite.Length; y++)
             {
-                var level = Math.Clamp(battery, 0, 100) / 100f;
-                var color = charging ? Theme.Accent : battery <= 15 ? Theme.Urgent : battery <= 30 ? Theme.Warning : Theme.Good;
-                var top = body.Bottom - body.Height * level;
-                var clip = g.Clip;
-                g.SetClip(path);
-                using (var brush = new SolidBrush(color)) g.FillRectangle(brush, body.X, top, body.Width, body.Bottom - top);
-                g.Clip = clip;
+                var row = Sprite[y];
+                int first = row.IndexOf('b'), last = row.LastIndexOf('b');
+                for (var x = 0; x < row.Length; x++)
+                {
+                    Color color;
+                    switch (row[x])
+                    {
+                        case 'K': color = Edge; break;
+                        case 'O': color = outline; break;
+                        case 'W': color = wheel; break;
+                        case 'b':
+                            if (BodyBottom - y >= filled) { color = Empty; break; }
+                            // Light left column, shaded right column: the usual pixel-art volume.
+                            color = x == first ? Mix(fill, Color.White, 0.35f) : x == last ? Mix(fill, Color.Black, 0.25f) : fill;
+                            break;
+                        default: continue;
+                    }
+                    // Cell edges rounded to whole pixels, so 16, 32 and 48 px stay crisp and 20 or 24 px still fill the icon.
+                    int x0 = x * size / 16, y0 = y * size / 16, x1 = (x + 1) * size / 16, y1 = (y + 1) * size / 16;
+                    using var brush = new SolidBrush(color);
+                    g.FillRectangle(brush, x0, y0, x1 - x0, y1 - y0);
+                }
             }
-
-            var outline = known ? Color.White : Color.FromArgb(0xA0, 0xA0, 0xA0);
-            using var pen = new Pen(outline, stroke);
-            g.DrawPath(pen, path);
-            g.DrawLine(pen, body.X + r, body.Y + stroke, body.X + r, body.Y + body.Height * 0.3f);
         }
         var handle = bitmap.GetHicon();
         try { return (Icon)Icon.FromHandle(handle).Clone(); }
         finally { DestroyIcon(handle); }
     }
+
+    private static Color Mix(Color a, Color b, float t) => Color.FromArgb(
+        (int)Math.Round(a.R + (b.R - a.R) * t), (int)Math.Round(a.G + (b.G - a.G) * t), (int)Math.Round(a.B + (b.B - a.B) * t));
 
     [System.Runtime.InteropServices.DllImport("user32.dll")]
     private static extern bool DestroyIcon(IntPtr handle);
