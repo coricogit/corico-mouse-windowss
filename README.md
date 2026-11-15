@@ -3,7 +3,7 @@
 App de bandeja del sistema para el **Dareu A950 PRO 4K** con su receptor 2.4G.
 Es la versión para Windows del plugin `corico.mouse` de Omarchy.
 
-![Panel](docs/panel-demo.png)
+![Panel con el tema Pixel art](docs/tema-pixel.png)
 
 ## Qué hace
 
@@ -19,9 +19,35 @@ Es la versión para Windows del plugin `corico.mouse` de Omarchy.
   aceleración" desactiva "Mejorar precisión del puntero". Aplican a todos los
   mouse.
 - **Iniciar con Windows:** opcional y sin permisos de administrador.
+- **Temas:** cuatro aspectos para el panel y el ícono de la bandeja (abajo).
 
 Cada cambio en el mouse se vuelve a leer para confirmarlo. La app no envía
 comandos de firmware, de reinicio, de emparejamiento ni de macros.
+
+## Temas
+
+Elige el tema con clic derecho en el ícono de la bandeja → **Tema**, o con el
+enlace **Tema** del panel. La app lo recuerda. El ícono de la bandeja cambia con
+el tema; el del programa y el instalador es siempre el de pixel art.
+
+| Pixel art (por defecto) | Windows 11 | Tarjetas | Compacto |
+|---|---|---|---|
+| ![Pixel art](docs/tema-pixel.png) | ![Windows 11](docs/tema-windows11.png) | ![Tarjetas](docs/tema-tarjetas.png) | ![Compacto](docs/tema-compacto.png) |
+
+- **Pixel art:** el ratón del ícono en grande, la batería en bloques, botones
+  cuadrados con sombra y barras de bloques. Títulos con la fuente
+  [Silkscreen](https://github.com/googlefonts/silkscreen).
+- **Windows 11:** tarjetas, controles segmentados e interruptores. Sigue el modo
+  claro u oscuro y el color de acento de Windows.
+- **Tarjetas:** anillo de batería y el DPI en grande; − y + cambian de nivel.
+  "Puntero de Windows" se despliega al hacer clic.
+- **Compacto:** mosaicos como la configuración rápida de Windows. DPI y Hz pasan
+  al siguiente valor con cada clic (clic derecho en DPI: el anterior). **Más
+  ajustes** abre todo lo demás.
+
+Íconos de la bandeja por tema (100 %, 55 %, 25 %, 10 %, cargando y sin mouse):
+
+![Íconos de la bandeja](docs/iconos-bandeja.png)
 
 ## Instalar
 
@@ -88,6 +114,9 @@ El instalador se arma con [NSIS](https://nsis.sourceforge.io/) y queda en
 El formato del protocolo sigue la documentación del proyecto
 [OpenMouse](https://github.com/OpenMouse-Project/mouse-protocol) para el
 A950 PRO Mg. Este código es una implementación independiente.
+
+La fuente Silkscreen (Copyright 2001 The Silkscreen Project Authors) va dentro
+de la app bajo la [SIL Open Font License 1.1](src/DareuMouse/Fonts/OFL.txt).
 
 ## Licencia
 

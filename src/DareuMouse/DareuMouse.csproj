@@ -19,6 +19,11 @@
     <DebugType>none</DebugType>
   </PropertyGroup>
   <ItemGroup>
+    <!-- Silkscreen pixel font for the Pixel theme (SIL Open Font License, Fonts/OFL.txt). -->
+    <EmbeddedResource Include="Fonts\*.ttf" LogicalName="DareuMouse.Fonts.%(Filename)%(Extension)" />
+    <None Include="Fonts\OFL.txt" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+  <ItemGroup>
     <ProjectReference Include="../DareuMouse.Core/DareuMouse.Core.csproj" />
   </ItemGroup>
 </Project>

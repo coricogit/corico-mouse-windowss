@@ -36,6 +36,29 @@ internal static class T
     public static string Copied => S("Diagnóstico copiado al portapapeles.", "Diagnostics copied to the clipboard.");
     public static string Exit => S("Salir", "Exit");
     public static string AlreadyRunning => S("Dareu Mouse ya está abierto en la bandeja del sistema.", "Dareu Mouse is already running in the system tray.");
+    public static string Theme => S("Tema", "Theme");
+    public static string ThemeName(ThemeKind kind) => kind switch
+    {
+        ThemeKind.Fluent => "Windows 11",
+        ThemeKind.Cards => S("Tarjetas", "Cards"),
+        ThemeKind.Compact => S("Compacto", "Compact"),
+        _ => "Pixel art",
+    };
+    public static string More => S("Más ajustes", "More settings");
+    public static string Less => S("Menos ajustes", "Fewer settings");
+    public static string StageOf(int stage, int count) => S($"Nivel {stage} de {count}", $"Stage {stage} of {count}");
+    public static string PreviousStage => S("Nivel de DPI anterior", "Previous DPI stage");
+    public static string NextStage => S("Siguiente nivel de DPI", "Next DPI stage");
+    public static string PointerSpeed => S("Velocidad del puntero", "Pointer speed");
+    public static string PointerSummary(int speed, bool noAccel) =>
+        S($"Velocidad {speed} · {(noAccel ? "sin aceleración" : "con aceleración")}", $"Speed {speed} · {(noAccel ? "no acceleration" : "acceleration on")}");
+    public static string ExactDpi => S("DPI exacto", "Exact DPI");
+    public static string TileAccel => S("Sin acel.", "No accel");
+    public static string TileAccelCaption => S("Aceleración", "Acceleration");
+    public static string TileStartup => S("Inicio", "Startup");
+    public static string TileStartupCaption => S("Con Windows", "With Windows");
+    public static string TileCopy => S("Copiar", "Copy");
+    public static string TileCopyCaption => S("Diagnóstico", "Diagnostics");
     public static string LowBatteryTitle => S("Batería baja", "Low battery");
     public static string LowBattery(int percent) => S($"Al mouse le queda {percent} %. Conéctalo para cargarlo.", $"The mouse has {percent}% left. Plug it in to charge.");
 }

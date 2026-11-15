@@ -39,6 +39,7 @@ internal sealed class TrayContext : ApplicationContext
     private readonly PanelForm _panel;
     private readonly NotifyIcon _tray = new();
     private Icon? _icon;
+    private readonly ToolStripMenuItem _themeMenu;
 
     public TrayContext(MouseService service, bool startHidden)
     {
@@ -46,6 +47,14 @@ internal sealed class TrayContext : ApplicationContext
         var menu = new ContextMenuStrip();
         menu.Items.Add(T.Open, null, (_, _) => _panel.ShowPanel());
         menu.Items.Add(T.Refresh, null, async (_, _) => await _panel.RefreshAsync());
+        _themeMenu = new ToolStripMenuItem(T.Theme);
+        menu.Items.Add(_themeMenu);
+        menu.Opening += (_, _) =>
+        {
+            // Rebuilt each time so the check mark follows a change made from the panel.
+            _themeMenu.DropDownItems.Clear();
+            PanelForm.FillThemeMenu(_themeMenu.DropDownItems, _panel.SetTheme);
+        };
         menu.Items.Add(new ToolStripSeparator());
         menu.Items.Add(T.Exit, null, (_, _) => ExitThread());
         _tray.ContextMenuStrip = menu;
@@ -56,6 +65,7 @@ internal sealed class TrayContext : ApplicationContext
 
         _panel.StateChanged += OnState;
         _panel.ExitRequested += ExitThread;
+        _panel.ThemeChanged += () => SetIcon(_panel.State);
         _ = _panel.Handle; // create the window so timers and callbacks have a thread to run on
         if (startHidden) _ = _panel.RefreshAsync();
         else _panel.ShowPanel();
@@ -81,7 +91,7 @@ internal sealed class TrayContext : ApplicationContext
     private void SetIcon(MouseState state)
     {
         var size = SystemInformation.SmallIconSize.Width;
-        var icon = TrayIcon.Draw(state.Battery, state.Status == MouseStatus.Ok, state.Charging, Math.Max(16, size));
+        var icon = TrayIcon.Draw(Theme.Kind, state.Battery, state.Status == MouseStatus.Ok, state.Charging, Math.Max(16, size));
         _tray.Icon = icon;
         _icon?.Dispose();
         _icon = icon;

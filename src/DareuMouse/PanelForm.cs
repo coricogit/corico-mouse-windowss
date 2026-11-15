@@ -3,8 +3,11 @@ using DareuMouse.Core;
 
 namespace DareuMouse;
 
-/// <summary>The panel that opens from the tray icon.</summary>
-internal sealed class PanelForm : Form
+/// <summary>
+/// The panel that opens from the tray icon. This file holds the state and the mouse and pointer actions;
+/// each theme lays the shared controls out in its own file under Layouts/.
+/// </summary>
+internal sealed partial class PanelForm : Form
 {
     private readonly MouseService _service;
     private readonly SemaphoreSlim _busy = new(1, 1);
@@ -12,20 +15,26 @@ internal sealed class PanelForm : Form
     private readonly System.Windows.Forms.Timer _dpiDebounce = new() { Interval = 350 };
     private readonly System.Windows.Forms.Timer _speedDebounce = new() { Interval = 250 };
 
-    private readonly Label _subtitle = new();
-    private readonly Label _battery = new();
-    private readonly Label _status = new();
-    private readonly Panel _mouseSections = new();
-    private readonly FlowLayoutPanel _stagePills = new();
-    private readonly Label _editLabel = new();
-    private readonly TrackBar _dpiSlider = new();
-    private readonly NumericUpDown _dpiBox = new();
-    private readonly FlowLayoutPanel _pollingPills = new();
-    private readonly Label _pollingNote = new();
-    private readonly TrackBar _speedSlider = new();
-    private readonly Label _speedValue = new();
-    private readonly CheckBox _noAccel = new();
-    private readonly CheckBox _startup = new();
+    // Shared controls, created again for every theme (see CreateControls).
+    private Label _subtitle = null!;
+    private Label _battery = null!;
+    private Label _status = null!;
+    private FlowLayoutPanel _stagePills = null!;
+    private Label _editLabel = null!;
+    private Slider _dpiSlider = null!;
+    private NumericUpDown _dpiBox = null!;
+    private FlowLayoutPanel _pollingPills = null!;
+    private Label _pollingNote = null!;
+    private Slider _speedSlider = null!;
+    private Label _speedValue = null!;
+    private Switch _noAccel = null!;
+    private Switch _startup = null!;
+
+    /// <summary>Controls that only make sense while the mouse answers (hidden when asleep or missing).</summary>
+    private readonly List<Control> _mouseOnly = [];
+
+    /// <summary>What the current theme draws on top of the shared controls (battery ring, tiles...).</summary>
+    private Action? _renderTheme;
 
     private MouseState _state = MouseState.Of(MouseStatus.Loading);
     private int _editStage = -1;
@@ -40,7 +49,12 @@ internal sealed class PanelForm : Form
 
     public event Action? ExitRequested;
 
+    /// <summary>Raised after the theme changed (the tray icon follows it).</summary>
+    public event Action? ThemeChanged;
+
     public MouseState State => _state;
+
+    private int Width340 => Px(340);
 
     public PanelForm(MouseService service)
     {
@@ -50,21 +64,20 @@ internal sealed class PanelForm : Form
         ShowInTaskbar = false;
         TopMost = true;
         StartPosition = FormStartPosition.Manual;
-        BackColor = Theme.Background;
-        ForeColor = Theme.Text;
-        Font = Theme.Body;
         AutoScaleMode = AutoScaleMode.None;
-        Padding = new Padding(Px(16));
         KeyPreview = true;
         ResizeRedraw = true;
+        AutoSize = true;
+        AutoSizeMode = AutoSizeMode.GrowAndShrink;
 
-        BuildLayout();
+        BuildForTheme();
 
         _refreshTimer.Tick += async (_, _) => await RefreshAsync();
         _dpiDebounce.Tick += async (_, _) => { _dpiDebounce.Stop(); await CommitDpiAsync(); };
         _speedDebounce.Tick += (_, _) => { _speedDebounce.Stop(); CommitSpeed(); };
         SetRefreshInterval(visible: false);
         _refreshTimer.Start();
+        Microsoft.Win32.SystemEvents.UserPreferenceChanged += OnUserPreferenceChanged;
     }
 
     private int Px(int logical) => LogicalToDeviceUnits(logical);
@@ -79,122 +92,175 @@ internal sealed class PanelForm : Form
         }
     }
 
+    protected override void OnHandleCreated(EventArgs e)
+    {
+        base.OnHandleCreated(e);
+        WindowsLook.SetCorners(Handle, rounded: Theme.Kind != ThemeKind.Pixel);
+    }
+
     protected override void OnPaint(PaintEventArgs e)
     {
         base.OnPaint(e);
-        using var pen = new Pen(Theme.Border);
-        e.Graphics.DrawRectangle(pen, 0, 0, Width - 1, Height - 1);
+        if (Theme.Kind == ThemeKind.Pixel)
+        {
+            // Black frame with a lighter inner line, like a pixel-art window.
+            using var black = new Pen(Color.Black, Px(2)) { Alignment = System.Drawing.Drawing2D.PenAlignment.Inset };
+            e.Graphics.DrawRectangle(black, 0, 0, Width - 1, Height - 1);
+            using var inner = new Pen(Theme.Border, 1);
+            e.Graphics.DrawRectangle(inner, Px(2), Px(2), Width - 1 - Px(4), Height - 1 - Px(4));
+        }
+        else if (Environment.OSVersion.Version.Build < 22000)
+        {
+            using var pen = new Pen(Theme.Border);
+            e.Graphics.DrawRectangle(pen, 0, 0, Width - 1, Height - 1);
+        }
     }
 
-    // ---------- Layout ----------
+    // ---------- Themes ----------
 
-    private void BuildLayout()
+    /// <summary>Saves the theme and rebuilds the panel with it.</summary>
+    public void SetTheme(ThemeKind kind)
     {
-        var width = Px(340);
-        var column = new FlowLayoutPanel
+        if (kind == Theme.Kind) return;
+        Try(() => ThemeSettings.Save(kind));
+        Theme.Apply(kind);
+        Rebuild();
+        ThemeChanged?.Invoke();
+    }
+
+    private void OnUserPreferenceChanged(object? sender, Microsoft.Win32.UserPreferenceChangedEventArgs e)
+    {
+        if (e.Category != Microsoft.Win32.UserPreferenceCategory.General) return;
+        // Light/dark mode or the accent color changed: Fluent follows Windows, every tray icon follows the taskbar.
+        BeginInvoke(() =>
         {
-            FlowDirection = FlowDirection.TopDown,
-            WrapContents = false,
-            AutoSize = true,
-            AutoSizeMode = AutoSizeMode.GrowAndShrink,
-            Location = new Point(Padding.Left, Padding.Top),
-            BackColor = Theme.Background,
-            Margin = Padding.Empty,
-        };
+            if (Theme.Kind == ThemeKind.Fluent)
+            {
+                Theme.Apply(ThemeKind.Fluent);
+                Rebuild();
+            }
+            ThemeChanged?.Invoke();
+        });
+    }
 
-        // Header: name and connection on the left, battery on the right.
-        var header = new TableLayoutPanel { ColumnCount = 2, RowCount = 2, MinimumSize = new Size(width, 0), MaximumSize = new Size(width, 0), AutoSize = true, Margin = Padding.Empty };
-        header.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
-        header.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
-        var title = new Label { Text = T.Title, Font = Theme.Title, AutoSize = true, Margin = Padding.Empty };
-        Style(_subtitle, Theme.Small, Theme.Muted);
-        _battery.Font = Theme.Title;
-        _battery.AutoSize = true;
-        _battery.Anchor = AnchorStyles.Right;
-        _battery.Margin = Padding.Empty;
-        header.Controls.Add(title, 0, 0);
-        header.Controls.Add(_battery, 1, 0);
-        header.Controls.Add(_subtitle, 0, 1);
-        column.Controls.Add(header);
+    private void Rebuild()
+    {
+        SuspendLayout();
+        // Shared controls a theme did not place (e.g. Compact has no big battery label) have no parent: dispose them too.
+        foreach (var c in new Control[] { _subtitle, _battery, _status, _stagePills, _editLabel, _dpiSlider, _dpiBox, _pollingPills, _pollingNote, _speedSlider, _speedValue, _noAccel, _startup })
+            if (c.Parent is null) c.Dispose();
+        var old = Controls.Cast<Control>().ToList();
+        Controls.Clear();
+        foreach (var c in old) c.Dispose();
+        BuildForTheme();
+        LoadPointer();
+        _updating = true;
+        _startup.Checked = SafeGet(() => Startup.Enabled);
+        _updating = false;
+        Render();
+        ResumeLayout(true);
+        if (IsHandleCreated) WindowsLook.SetCorners(Handle, rounded: Theme.Kind != ThemeKind.Pixel);
+        if (Visible) KeepOnScreen();
+        Invalidate(true);
+    }
 
-        Style(_status, Theme.Body, Theme.Warning);
-        _status.MaximumSize = new Size(width, 0);
-        _status.Margin = new Padding(0, Px(10), 0, 0);
-        column.Controls.Add(_status);
-
-        // Mouse settings (hidden while the mouse is asleep or missing).
-        var mouseColumn = new FlowLayoutPanel
+    private void BuildForTheme()
+    {
+        BackColor = Theme.Background;
+        ForeColor = Theme.Text;
+        Font = Theme.Body;
+        Padding = new Padding(Px(Theme.Kind switch { ThemeKind.Pixel => 18, ThemeKind.Cards => 14, _ => 16 }));
+        _mouseOnly.Clear();
+        _renderTheme = null;
+        CreateControls();
+        var column = Theme.Kind switch
         {
-            FlowDirection = FlowDirection.TopDown, WrapContents = false, AutoSize = true,
-            AutoSizeMode = AutoSizeMode.GrowAndShrink, Margin = Padding.Empty,
+            ThemeKind.Fluent => BuildFluent(),
+            ThemeKind.Cards => BuildCards(),
+            ThemeKind.Compact => BuildCompact(),
+            _ => BuildPixel(),
         };
-        mouseColumn.Controls.Add(SectionHeader(T.Dpi, T.DpiHint, width));
-        Row(_stagePills, width);
-        mouseColumn.Controls.Add(_stagePills);
+        column.Location = new Point(Padding.Left, Padding.Top);
+        Controls.Add(column);
+    }
 
-        Style(_editLabel, Theme.Small, Theme.Muted);
-        _editLabel.Margin = new Padding(0, Px(8), 0, 0);
-        mouseColumn.Controls.Add(_editLabel);
+    /// <summary>The menu with the four themes, the current one checked.</summary>
+    public static void FillThemeMenu(ToolStripItemCollection items, Action<ThemeKind> pick)
+    {
+        foreach (var kind in Enum.GetValues<ThemeKind>())
+        {
+            var item = new ToolStripMenuItem(T.ThemeName(kind)) { Checked = kind == Theme.Kind };
+            item.Click += (_, _) => pick(kind);
+            items.Add(item);
+        }
+    }
 
-        var dpiRow = new TableLayoutPanel { ColumnCount = 2, MinimumSize = new Size(width, 0), MaximumSize = new Size(width, 0), AutoSize = true, Margin = Padding.Empty };
-        dpiRow.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
-        dpiRow.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
-        _dpiSlider.Minimum = Protocol.DpiMin / Protocol.DpiStep;
-        _dpiSlider.Maximum = Protocol.DpiMax / Protocol.DpiStep;
-        _dpiSlider.SmallChange = 1;
-        _dpiSlider.LargeChange = 8;
-        _dpiSlider.TickStyle = TickStyle.None;
-        _dpiSlider.Dock = DockStyle.Fill;
-        _dpiSlider.BackColor = Theme.Background;
+    private void ShowThemeMenu(Control anchor)
+    {
+        var menu = new ContextMenuStrip();
+        FillThemeMenu(menu.Items, SetTheme);
+        menu.Closed += (_, _) => BeginInvoke(menu.Dispose);
+        menu.Show(anchor, new Point(0, anchor.Height));
+    }
+
+    // ---------- Shared controls ----------
+
+    private void CreateControls()
+    {
+        _subtitle = NewLabel(Theme.Small, Theme.Muted);
+        _battery = NewLabel(Theme.Title, Theme.Text);
+        _status = NewLabel(Theme.Body, Theme.Warning);
+        _status.MaximumSize = new Size(Width340, 0);
+        _status.Margin = new Padding(0, Px(8), 0, 0);
+
+        _stagePills = NewRow();
+        _editLabel = NewLabel(Theme.Small, Theme.Muted);
+        _editLabel.Margin = new Padding(0, Px(6), 0, 0);
+
+        _dpiSlider = new Slider
+        {
+            Minimum = Protocol.DpiMin / Protocol.DpiStep,
+            Maximum = Protocol.DpiMax / Protocol.DpiStep,
+            SmallChange = 1,
+            LargeChange = 8,
+            AccessibleName = "DPI",
+        };
         _dpiSlider.ValueChanged += (_, _) =>
         {
             if (_updating) return;
             SetDpiControls(_dpiSlider.Value * Protocol.DpiStep, fromSlider: true);
         };
-        _dpiBox.Minimum = Protocol.DpiMin;
-        _dpiBox.Maximum = Protocol.DpiMax;
-        _dpiBox.Increment = Protocol.DpiStep;
-        _dpiBox.Width = Px(84);
-        _dpiBox.BackColor = Theme.Surface;
-        _dpiBox.ForeColor = Theme.Text;
-        _dpiBox.BorderStyle = BorderStyle.FixedSingle;
-        _dpiBox.TextAlign = HorizontalAlignment.Right;
-        _dpiBox.Anchor = AnchorStyles.Right;
+        _dpiBox = new NumericUpDown
+        {
+            Minimum = Protocol.DpiMin,
+            Maximum = Protocol.DpiMax,
+            Increment = Protocol.DpiStep,
+            Width = Px(84),
+            BackColor = Theme.Kind == ThemeKind.Pixel ? Theme.Track : Theme.Surface,
+            ForeColor = Theme.Text,
+            BorderStyle = BorderStyle.FixedSingle,
+            TextAlign = HorizontalAlignment.Right,
+            Font = Theme.Kind == ThemeKind.Pixel ? Theme.Display : Theme.Body,
+            Anchor = AnchorStyles.Right,
+            AccessibleName = "DPI",
+        };
         _dpiBox.ValueChanged += (_, _) =>
         {
             if (_updating) return;
             SetDpiControls((int)_dpiBox.Value, fromSlider: false);
         };
-        dpiRow.Controls.Add(_dpiSlider, 0, 0);
-        dpiRow.Controls.Add(_dpiBox, 1, 0);
-        mouseColumn.Controls.Add(dpiRow);
 
-        mouseColumn.Controls.Add(SectionHeader(T.Polling, null, width));
-        Row(_pollingPills, width);
-        mouseColumn.Controls.Add(_pollingPills);
-        Style(_pollingNote, Theme.Small, Theme.Warning);
-        _pollingNote.MaximumSize = new Size(width, 0);
+        _pollingPills = NewRow();
+        _pollingNote = NewLabel(Theme.Small, Theme.Warning);
+        _pollingNote.MaximumSize = new Size(Width340, 0);
         _pollingNote.Margin = new Padding(0, Px(6), 0, 0);
-        mouseColumn.Controls.Add(_pollingNote);
 
-        _mouseSections.AutoSize = true;
-        _mouseSections.AutoSizeMode = AutoSizeMode.GrowAndShrink;
-        _mouseSections.Margin = Padding.Empty;
-        _mouseSections.Controls.Add(mouseColumn);
-        column.Controls.Add(_mouseSections);
-
-        // Windows pointer settings: always available.
-        column.Controls.Add(SectionHeader(T.Pointer, T.SpeedHint, width));
-        var speedRow = new TableLayoutPanel { ColumnCount = 3, MinimumSize = new Size(width, 0), MaximumSize = new Size(width, 0), AutoSize = true, Margin = Padding.Empty };
-        speedRow.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
-        speedRow.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
-        speedRow.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
-        var speedLabel = new Label { Text = T.Speed, AutoSize = true, Anchor = AnchorStyles.Left, Margin = new Padding(0, 0, Px(8), 0) };
-        _speedSlider.Minimum = WindowsPointer.SpeedMin;
-        _speedSlider.Maximum = WindowsPointer.SpeedMax;
-        _speedSlider.TickStyle = TickStyle.None;
-        _speedSlider.Dock = DockStyle.Fill;
-        _speedSlider.BackColor = Theme.Background;
+        _speedSlider = new Slider
+        {
+            Minimum = WindowsPointer.SpeedMin,
+            Maximum = WindowsPointer.SpeedMax,
+            AccessibleName = T.Speed,
+        };
         _speedSlider.ValueChanged += (_, _) =>
         {
             ShowSpeed(_speedSlider.Value);
@@ -206,116 +272,142 @@ internal sealed class PanelForm : Form
         {
             if (e.Button == MouseButtons.Right) _speedSlider.Value = WindowsPointer.SpeedNeutral;
         };
-        Style(_speedValue, Theme.Body, Theme.Text);
-        _speedValue.Anchor = AnchorStyles.Right;
-        _speedValue.MinimumSize = new Size(Px(110), 0);
+        _speedValue = NewLabel(Theme.Body, Theme.Text);
         _speedValue.TextAlign = ContentAlignment.MiddleRight;
-        speedRow.Controls.Add(speedLabel, 0, 0);
-        speedRow.Controls.Add(_speedSlider, 1, 0);
-        speedRow.Controls.Add(_speedValue, 2, 0);
-        column.Controls.Add(speedRow);
 
-        CheckStyle(_noAccel, T.NoAccel, width);
+        _noAccel = new Switch { Text = T.NoAccel, AccessibleName = T.NoAccel };
         _noAccel.CheckedChanged += (_, _) =>
         {
             if (_updating) return;
             Try(() => WindowsPointer.SetAcceleration(!_noAccel.Checked));
             LoadPointer();
         };
-        column.Controls.Add(_noAccel);
-        var pointerNote = new Label { Text = T.PointerNote };
-        Style(pointerNote, Theme.Small, Theme.Muted);
-        pointerNote.Margin = new Padding(Px(20), 0, 0, 0);
-        pointerNote.MaximumSize = new Size(width - Px(20), 0);
-        column.Controls.Add(pointerNote);
-
-        // Footer.
-        var line = new Panel { Height = 1, Width = width, BackColor = Theme.Border, Margin = new Padding(0, Px(14), 0, Px(8)) };
-        column.Controls.Add(line);
-        var footer = new TableLayoutPanel { ColumnCount = 3, MinimumSize = new Size(width, 0), MaximumSize = new Size(width, 0), AutoSize = true, Margin = Padding.Empty };
-        footer.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
-        footer.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
-        footer.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
-        CheckStyle(_startup, T.StartWithWindows, 0);
-        _startup.Margin = Padding.Empty;
+        _startup = new Switch { Text = T.StartWithWindows, AccessibleName = T.StartWithWindows };
         _startup.CheckedChanged += (_, _) =>
         {
             if (_updating) return;
             Try(() => Startup.Enabled = _startup.Checked);
         };
-        var diagnose = Link(T.CopyDiagnostics, CopyDiagnostics);
-        var exit = Link(T.Exit, () => ExitRequested?.Invoke());
-        footer.Controls.Add(_startup, 0, 0);
-        footer.Controls.Add(diagnose, 1, 0);
-        footer.Controls.Add(exit, 2, 0);
-        column.Controls.Add(footer);
-
-        Controls.Add(column);
-        AutoSize = true;
-        AutoSizeMode = AutoSizeMode.GrowAndShrink;
     }
 
-    private Control SectionHeader(string text, string? hint, int width)
+    private FlowLayoutPanel NewRow()
     {
-        var row = new TableLayoutPanel { ColumnCount = 2, MinimumSize = new Size(width, 0), MaximumSize = new Size(width, 0), AutoSize = true, Margin = new Padding(0, Px(16), 0, Px(6)) };
+        var segmented = Theme.Kind is ThemeKind.Fluent or ThemeKind.Cards;
+        return new FlowLayoutPanel
+        {
+            FlowDirection = FlowDirection.LeftToRight,
+            WrapContents = false,
+            Margin = Padding.Empty,
+            Padding = segmented ? new Padding(Px(3)) : Padding.Empty,
+            BackColor = segmented ? Theme.Track : Theme.Background,
+        };
+    }
+
+    /// <summary>Sizes a pill row for the theme (pixel pills need room for their shadow).</summary>
+    private void SizeRow(FlowLayoutPanel row, int width, int? height = null)
+    {
+        row.Width = width;
+        row.Height = height ?? (Theme.Kind switch { ThemeKind.Pixel => Px(37), ThemeKind.Compact => Px(34), _ => Px(36) });
+    }
+
+    private static Label NewLabel(Font font, Color color) =>
+        new() { Font = font, ForeColor = color, AutoSize = true, Margin = Padding.Empty, BackColor = Color.Transparent };
+
+    private Label Note(string text, int width)
+    {
+        var label = NewLabel(Theme.Small, Theme.Muted);
+        label.Text = text;
+        label.MaximumSize = new Size(width, 0);
+        return label;
+    }
+
+    /// <summary>Small upper-case section title with an optional hint on the right.</summary>
+    private Control SectionHeader(string text, string? hint, int width, int top = 16)
+    {
+        var row = new TableLayoutPanel { ColumnCount = 2, MinimumSize = new Size(width, 0), MaximumSize = new Size(width, 0), AutoSize = true, Margin = new Padding(0, Px(top), 0, Px(6)), BackColor = Color.Transparent };
         row.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
         row.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
-        var label = new Label { Text = text.ToUpper(CultureInfo.CurrentCulture) };
-        Style(label, Theme.Section, Theme.Muted);
+        var label = NewLabel(Theme.Section, Theme.Kind == ThemeKind.Pixel ? Theme.Accent : Theme.Kind == ThemeKind.Fluent ? Theme.Text : Theme.Muted);
+        label.Text = Theme.Kind == ThemeKind.Fluent ? text : text.ToUpper(CultureInfo.CurrentCulture);
         row.Controls.Add(label, 0, 0);
         if (hint is not null)
         {
-            var h = new Label { Text = hint, Anchor = AnchorStyles.Right };
-            Style(h, Theme.Small, Theme.Muted);
+            var h = NewLabel(Theme.Small, Theme.Muted);
+            h.Text = hint;
+            h.Anchor = AnchorStyles.Right;
             row.Controls.Add(h, 1, 0);
         }
         return row;
     }
 
-    private void Row(FlowLayoutPanel row, int width)
+    private static FlowLayoutPanel Column(int width = 0) => new()
     {
-        row.FlowDirection = FlowDirection.LeftToRight;
-        row.WrapContents = false;
-        row.Width = width;
-        row.Height = Px(34);
-        row.Margin = Padding.Empty;
-        row.BackColor = Theme.Background;
-    }
+        FlowDirection = FlowDirection.TopDown,
+        WrapContents = false,
+        AutoSize = true,
+        AutoSizeMode = AutoSizeMode.GrowAndShrink,
+        Margin = Padding.Empty,
+        BackColor = Color.Transparent,
+        MinimumSize = new Size(width, 0),
+    };
 
-    private static void Style(Label label, Font font, Color color)
+    /// <summary>A table row: [fixed | stretch | fixed] columns, the usual label/slider/value line.</summary>
+    private TableLayoutPanel Line(int width, params Control[] cells)
     {
-        label.Font = font;
-        label.ForeColor = color;
-        label.AutoSize = true;
-        label.Margin = Padding.Empty;
-    }
-
-    private void CheckStyle(CheckBox box, string text, int width)
-    {
-        box.Text = text;
-        box.AutoSize = true;
-        if (width > 0) box.MaximumSize = new Size(width, 0);
-        box.ForeColor = Theme.Text;
-        box.FlatStyle = FlatStyle.System;
-        box.Margin = new Padding(0, Px(8), 0, 0);
-        box.Cursor = Cursors.Hand;
+        var row = new TableLayoutPanel { ColumnCount = cells.Length, MinimumSize = new Size(width, 0), MaximumSize = new Size(width, 0), AutoSize = true, Margin = Padding.Empty, BackColor = Color.Transparent };
+        for (var i = 0; i < cells.Length; i++)
+        {
+            row.ColumnStyles.Add(cells[i] is Slider or Stretch ? new ColumnStyle(SizeType.Percent, 100) : new ColumnStyle(SizeType.AutoSize));
+            if (cells[i] is Slider or Stretch) cells[i].Dock = DockStyle.Fill;
+            else if (cells[i].Anchor == (AnchorStyles.Top | AnchorStyles.Left)) cells[i].Anchor = AnchorStyles.Left;
+            row.Controls.Add(cells[i], i, 0);
+        }
+        return row;
     }
 
     private LinkLabel Link(string text, Action action)
     {
         var link = new LinkLabel
         {
-            Text = text, AutoSize = true, LinkColor = Theme.Accent, ActiveLinkColor = Theme.Text,
+            Text = text, AutoSize = true, LinkColor = Theme.Accent, ActiveLinkColor = Theme.Text, BackColor = Color.Transparent,
             LinkBehavior = LinkBehavior.HoverUnderline, Anchor = AnchorStyles.Right, Margin = new Padding(Px(10), 0, 0, 0),
         };
         link.LinkClicked += (_, _) => action();
         return link;
     }
 
-    private Pill NewPill(string text, int width)
+    /// <summary>Footer: start with Windows on the left; theme, diagnostics and exit on the right.</summary>
+    private Control Footer(int width, bool withStartup = true)
     {
-        return new Pill { Text = text, Width = width, Height = Px(30), Margin = new Padding(0, 0, Px(6), 0) };
+        var cells = new List<Control>();
+        if (withStartup)
+        {
+            _startup.Width = _startup.GetPreferredSize(Size.Empty).Width;
+            _startup.Margin = Padding.Empty;
+            cells.Add(_startup);
+        }
+        else
+        {
+            cells.Add(new Label { AutoSize = true, Margin = Padding.Empty });
+        }
+        LinkLabel? theme = null;
+        theme = Link(T.Theme, () => ShowThemeMenu(theme!));
+        cells.Add(theme);
+        var diagnose = Link(T.TileCopyCaption, CopyDiagnostics);
+        diagnose.AccessibleName = T.CopyDiagnostics;
+        cells.Add(diagnose);
+        cells.Add(Link(T.Exit, () => ExitRequested?.Invoke()));
+        var row = new TableLayoutPanel { ColumnCount = cells.Count, MinimumSize = new Size(width, 0), MaximumSize = new Size(width, 0), AutoSize = true, Margin = Padding.Empty, BackColor = Color.Transparent };
+        row.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+        for (var i = 1; i < cells.Count; i++) row.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+        for (var i = 0; i < cells.Count; i++) row.Controls.Add(cells[i], i, 0);
+        return row;
     }
+
+    private Pill NewPill(string text, int width, int height, Control row) =>
+        new() { Text = text, Width = width, Height = height, Margin = new Padding(0, 0, PillGap, 0), BackColor = row.BackColor };
+
+    private int PillGap => Theme.Kind switch { ThemeKind.Pixel => Px(5), ThemeKind.Fluent => Px(2), ThemeKind.Cards => Px(4), _ => Px(6) };
 
     // ---------- Showing and hiding ----------
 
@@ -377,6 +469,15 @@ internal sealed class PanelForm : Form
         var x = Math.Clamp(cursor.X - Width / 2, area.Left + gap, area.Right - Width - gap);
         _anchorBottom = cursor.Y > area.Top + area.Height / 2;
         _anchorEdge = _anchorBottom ? area.Bottom - gap : area.Top + gap;
+        Location = new Point(x, _anchorBottom ? _anchorEdge - Height : _anchorEdge);
+    }
+
+    /// <summary>After a theme change: same edge of the taskbar, still inside the screen.</summary>
+    private void KeepOnScreen()
+    {
+        var area = Screen.FromControl(this).WorkingArea;
+        var gap = Px(10);
+        var x = Math.Clamp(Left, area.Left + gap, Math.Max(area.Left + gap, area.Right - Width - gap));
         Location = new Point(x, _anchorBottom ? _anchorEdge - Height : _anchorEdge);
     }
 
@@ -446,6 +547,7 @@ internal sealed class PanelForm : Form
         _updating = false;
         var stage = ShownStage;
         if (stage >= 0 && stage < _stagePills.Controls.Count) _stagePills.Controls[stage].Text = FormatDpi(dpi);
+        _renderTheme?.Invoke();
         _dpiDebounce.Stop();
         _dpiDebounce.Start();
     }
@@ -467,6 +569,14 @@ internal sealed class PanelForm : Form
         await RunAsync(() => _service.SetActiveStage(stage));
     }
 
+    /// <summary>Next (+1) or previous (-1) DPI stage, wrapping around.</summary>
+    private Task StepStageAsync(int step)
+    {
+        if (_state.Status != MouseStatus.Ok || _state.Stages.Count == 0) return Task.CompletedTask;
+        var count = _state.Stages.Count;
+        return SelectStageAsync(((_state.ActiveStage + step) % count + count) % count);
+    }
+
     private void EditStage(int stage)
     {
         _editStage = stage == _state.ActiveStage ? -1 : stage;
@@ -479,6 +589,15 @@ internal sealed class PanelForm : Form
         _state = _state with { Polling = hz };
         Render();
         await RunAsync(() => _service.SetPolling(hz));
+    }
+
+    /// <summary>The next polling rate the connection allows, wrapping around.</summary>
+    private Task StepPollingAsync()
+    {
+        var options = _state.PollingOptions;
+        if (_state.Status != MouseStatus.Ok || options.Count == 0) return Task.CompletedTask;
+        var i = options.ToList().IndexOf(_state.Polling);
+        return SetPollingAsync(options[(i + 1) % options.Count]);
     }
 
     // ---------- Windows pointer ----------
@@ -494,8 +613,11 @@ internal sealed class PanelForm : Form
 
     private void CommitSpeed() => Try(() => WindowsPointer.SetSpeed(_speedSlider.Value));
 
-    private void ShowSpeed(int speed) =>
+    private void ShowSpeed(int speed)
+    {
         _speedValue.Text = speed == WindowsPointer.SpeedNeutral ? $"{speed} · {T.SpeedNeutral}" : speed.ToString(CultureInfo.CurrentCulture);
+        _renderTheme?.Invoke();
+    }
 
     // ---------- Rendering ----------
 
@@ -509,7 +631,8 @@ internal sealed class PanelForm : Form
         var s = _state;
         var ok = s.Status == MouseStatus.Ok;
 
-        _subtitle.Text = ok ? $"{(s.Wired ? T.Wired : T.Wireless)} · {s.Polling:N0} Hz".ToUpper(CultureInfo.CurrentCulture) : "";
+        _subtitle.Text = ok ? $"{(s.Wired ? T.Wired : T.Wireless)} · {s.Polling:N0} Hz" : "";
+        if (Theme.Kind == ThemeKind.Pixel) _subtitle.Text = _subtitle.Text.ToUpper(CultureInfo.CurrentCulture);
         _battery.Visible = ok;
         if (ok)
         {
@@ -528,25 +651,29 @@ internal sealed class PanelForm : Form
         _status.ForeColor = s.Status == MouseStatus.Error || s.Error is not null ? Theme.Urgent : Theme.Warning;
         _status.Visible = _status.Text.Length > 0;
 
-        _mouseSections.Visible = ok;
+        foreach (var c in _mouseOnly) c.Visible = ok;
         if (ok)
         {
             RenderStages();
             RenderPolling();
         }
+        _renderTheme?.Invoke();
         ResumeLayout(true);
     }
 
     private void RenderStages()
     {
         var s = _state;
-        var gap = Px(6);
-        var width = (_stagePills.Width - gap * (Protocol.MaxStages - 1)) / Protocol.MaxStages;
+        var gap = PillGap;
+        var inner = _stagePills.Width - _stagePills.Padding.Horizontal;
+        var width = (inner - gap * (Protocol.MaxStages - 1)) / Protocol.MaxStages;
+        var height = _stagePills.Height - _stagePills.Padding.Vertical;
         while (_stagePills.Controls.Count > s.Stages.Count) _stagePills.Controls[^1].Dispose();
         while (_stagePills.Controls.Count < s.Stages.Count)
         {
             var index = _stagePills.Controls.Count;
-            var pill = NewPill("", width);
+            var pill = NewPill("", width, height, _stagePills);
+            pill.AccessibleDescription = T.DpiHint;
             pill.MouseUp += async (_, e) =>
             {
                 if (e.Button == MouseButtons.Right) EditStage(index);
@@ -560,6 +687,7 @@ internal sealed class PanelForm : Form
             pill.Text = FormatDpi(s.Stages[i]);
             pill.Active = i == s.ActiveStage;
             pill.Marked = i == _editStage;
+            pill.Margin = new Padding(0, 0, i == s.Stages.Count - 1 ? 0 : gap, 0);
         }
 
         var stage = ShownStage;
@@ -578,16 +706,19 @@ internal sealed class PanelForm : Form
     {
         var s = _state;
         var options = s.PollingOptions;
-        var gap = Px(6);
-        var width = (_pollingPills.Width - gap * (6 - 1)) / 6;
+        var gap = PillGap;
+        var inner = _pollingPills.Width - _pollingPills.Padding.Horizontal;
+        var width = (inner - gap * (6 - 1)) / 6;
+        var height = _pollingPills.Height - _pollingPills.Padding.Vertical;
         if (_pollingPills.Controls.Count != options.Count
             || !_pollingPills.Controls.Cast<Control>().Select(c => (int)c.Tag!).SequenceEqual(options))
         {
             while (_pollingPills.Controls.Count > 0) _pollingPills.Controls[0].Dispose();
             foreach (var hz in options)
             {
-                var pill = NewPill(FormatHz(hz), width);
+                var pill = NewPill(FormatHz(hz), width, height, _pollingPills);
                 pill.Tag = hz;
+                pill.AccessibleName = $"{hz} Hz";
                 pill.MouseUp += async (_, e) => { if (e.Button == MouseButtons.Left) await SetPollingAsync(hz); };
                 _pollingPills.Controls.Add(pill);
             }
@@ -604,6 +735,7 @@ internal sealed class PanelForm : Form
     private void CopyDiagnostics()
     {
         var text = $"Dareu Mouse {Application.ProductVersion}\r\nWindows {Environment.OSVersion.Version}\r\n"
+            + $"Tema: {Theme.Kind}\r\n"
             + $"Estado: {_state.Status} {_state.Error}\r\n"
             + (_state.Status == MouseStatus.Ok
                 ? $"Batería {_state.Battery} % carga={_state.Charging} cable={_state.Wired} {_state.Polling} Hz "
@@ -621,6 +753,7 @@ internal sealed class PanelForm : Form
         try { action(); }
         catch (Exception e)
         {
+            if (_status is null) return;
             _status.Text = T.ErrorPrefix + e.Message;
             _status.ForeColor = Theme.Urgent;
             _status.Visible = true;
@@ -636,6 +769,7 @@ internal sealed class PanelForm : Form
     {
         if (disposing)
         {
+            Microsoft.Win32.SystemEvents.UserPreferenceChanged -= OnUserPreferenceChanged;
             _refreshTimer.Dispose();
             _dpiDebounce.Dispose();
             _speedDebounce.Dispose();
